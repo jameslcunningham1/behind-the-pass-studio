@@ -142,6 +142,13 @@ video.clip{width:100%;max-width:420px;border-radius:8px;background:#000;display:
 .addrow{display:flex;gap:8px;margin-top:10px;max-width:720px}
 .addrow input{flex:1;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink)}
 @media (max-width:640px){
+  .rec{padding:10px;gap:8px}
+  .rec h2{font-size:18px}
+  .rec-grid{gap:8px}
+  .cam{aspect-ratio:auto;height:34vh}
+  .slidebox{max-height:20vh;aspect-ratio:auto;height:20vh}
+  .prompter{max-height:44vh;font-size:20px;line-height:1.45}
+
   .team{grid-template-columns:1fr}
   .rec-grid{grid-template-columns:1fr}
   .ticket{grid-template-columns:36px 1fr}
@@ -314,9 +321,12 @@ const clipURL = id => { const c=S.clips[id]; if(!c) return ""; if(!URLS[id] || U
 let IDB=null;
 function openDB(){ return new Promise(res=>{ try{ const r=indexedDB.open("behind-the-pass-studio",1); r.onupgradeneeded=()=>r.result.createObjectStore("clips"); r.onsuccess=()=>res(r.result); r.onerror=()=>res(null); }catch(_){ res(null); } }); }
 function idb(mode, fn){ return new Promise((res,rej)=>{ if(!IDB) return res(null); try{ const tx=IDB.transaction("clips",mode); const st=tx.objectStore("clips"); const out=fn(st); tx.oncomplete=()=>res(out&&out.result!==undefined?out.result:null); tx.onerror=()=>rej(tx.error); }catch(e){ rej(e); } }); }
-async function saveClip(id, c){ S.clips[id]=c; try{ await idb("readwrite", st=>st.put(c,id)); }catch(e){ S.errors[id]="Saved for now, but this browser couldn't keep it after a reload. Send the file before closing."; } }
+async function saveClip(id, c){ S.clips[id]=c; if(c.group) return; try{ await idb("readwrite", st=>st.put(c,id)); }catch(e){ S.errors[id]="Saved for now, but this browser couldn't keep it after a reload. Send the file before closing."; } }
+/* Extra takes: a recording on a part that already has a clip never replaces it. */
+async function addTake(pid, c){ const key=pid+"#"+Date.now(); c.key=key; (S.takes[pid]=S.takes[pid]||[]).push(c); try{ await idb("readwrite", st=>st.put(c,key)); }catch(_){ S.errors[pid]="Saved for now, but this browser couldn't keep it after a reload. Send the take before closing."; } }
+async function dropTake(pid, key){ S.takes[pid]=(S.takes[pid]||[]).filter(t=>t.key!==key); try{ await idb("readwrite", st=>st.delete(key)); }catch(_){} }
 async function dropClip(id){ delete S.clips[id]; try{ await idb("readwrite", st=>st.delete(id)); }catch(_){} }
-async function loadClips(){ if(!IDB) return; await new Promise(res=>{ try{ const tx=IDB.transaction("clips","readonly"); const st=tx.objectStore("clips"); const r=st.openCursor(); r.onsuccess=()=>{ const cur=r.result; if(cur){ if(cur.value&&cur.value.blob) S.clips[cur.key]=cur.value; cur.continue(); } else res(); }; r.onerror=()=>res(); }catch(_){ res(); } }); }
+async function loadClips(){ if(!IDB) return; await new Promise(res=>{ try{ const tx=IDB.transaction("clips","readonly"); const st=tx.objectStore("clips"); const r=st.openCursor(); r.onsuccess=()=>{ const cur=r.result; if(cur){ if(cur.value&&cur.value.blob){ const k=String(cur.key); if(k.includes('#')){ const pid=k.split('#')[0]; cur.value.key=k; (S.takes[pid]=S.takes[pid]||[]).push(cur.value); } else S.clips[k]=cur.value; } cur.continue(); } else res(); }; r.onerror=()=>res(); }catch(_){ res(); } }); }
 function loadTeam(){ try{ const t=JSON.parse(localStorage.getItem("btp-team")||"{}"); S.team={m1:t.m1||"",m2:t.m2||"",m3:t.m3||""}; }catch(_){} }
 function saveTeam(){ try{ localStorage.setItem("btp-team", JSON.stringify(S.team)); }catch(_){} }
 
@@ -361,17 +371,22 @@ function renderRail(){
     if(b){
       body += '<div class="prog"><span>'+esc(b.label)+'</span>'+(b.p!=null?'<div class="bar"><i style="width:'+Math.round(b.p*100)+'%"></i></div>':"")+'</div>';
     } else if(c){
-      body += '<div class="status ok">Recorded · '+fmt(c.durationSec)+' · '+(c.blob.size/MB).toFixed(1)+' MB'+(c.sent?' · file saved':'')+'</div>';
+      body += '<div class="status ok">'+(c.group?'Group clip':'Recorded')+' · '+fmt(c.durationSec)+' · '+(c.blob.size/MB).toFixed(1)+' MB'+(c.sent?' · file saved':'')+'</div>';
       body += '<video class="clip" controls playsinline preload="metadata" src="'+clipURL(p.id)+'"></video>';
     } else {
       body += '<div class="status">Not recorded yet · aim for about '+fmt(p.sec)+'</div>';
     }
     if(p.slides && !b) body += '<div class="thumbs">'+p.slides.map(n=>'<img alt="Slide '+n+'" src="'+SLIDES[n]+'">').join("")+'</div>';
     if(c && p.slides && p.slides.length>1 && !b) body += '<div class="tiny">'+(c.marks&&c.marks.length>1?"Slide changes are timed.":"Slides switch at even intervals. Use <b>Time the slides</b> to match them to what you say.")+'</div>';
+    const tk=S.takes[p.id]||[];
+    if(tk.length && !b){
+      body += '<div class="tiny">Extra takes are kept next to the clip above and never replace it. Tap <b>Send take</b> so they can be cut into this part.</div>';
+      tk.forEach((t,j)=>{ body += '<div class="status ok">Your take '+(j+1)+' · '+fmt(t.durationSec)+' · '+(t.blob.size/MB).toFixed(1)+' MB'+(t.sent?' · sent':'')+'</div><video class="clip" controls playsinline preload="metadata" src="'+takeURL(t)+'"></video><div class="actions"><button class="btn" data-act="sendtake" data-id="'+p.id+'" data-key="'+esc(t.key)+'">'+ICON_SEND+'Send take</button><button class="btn danger" data-act="droptake" data-id="'+p.id+'" data-key="'+esc(t.key)+'">'+ICON_DEL+'<span>Delete take</span></button></div>'; });
+    }
     if(err) body += '<p class="err">'+esc(err)+'</p>';
     if(!b){
       body += '<div class="actions">';
-      body += '<button class="btn primary" data-act="record" data-id="'+p.id+'"><span class="rec-dot"></span>'+(c?"Record again":"Record")+'</button>';
+      body += '<button class="btn primary" data-act="record" data-id="'+p.id+'"><span class="rec-dot"></span>'+(c?"Record my lines":"Record")+'</button>';
       body += '<button class="btn" data-act="upload" data-id="'+p.id+'">'+ICON_UP+'Upload a video</button>';
       body += '<button class="btn danger" data-act="remove" data-id="'+p.id+'"'+(c?'':' disabled title="Nothing recorded yet"')+'>'+ICON_DEL+'<span>Delete</span></button>';
       if(c) body += '<button class="btn" data-act="send" data-id="'+p.id+'">'+ICON_SEND+'Send my clip</button>';
@@ -394,6 +409,8 @@ $("#rail").addEventListener("click", e => {
   if(b.dataset.act==="upload"){ e.preventDefault(); pickFile(p, false); }
   if(b.dataset.act==="remove"){ e.preventDefault(); removeClip(p, b); }
   if(b.dataset.act==="send"){ e.preventDefault(); sendClip(p); }
+  if(b.dataset.act==="sendtake"){ e.preventDefault(); sendTake(p, b.dataset.key); }
+  if(b.dataset.act==="droptake"){ e.preventDefault(); const lb=b.querySelector("span")||b; if(b.dataset.confirm!=="1"){ b.dataset.confirm="1"; lb.textContent="Tap again to delete"; setTimeout(()=>{ if(b.isConnected){ b.dataset.confirm=""; lb.textContent="Delete take"; } },4000); } else { dropTake(p.id, b.dataset.key).then(renderRail); } }
   if(b.dataset.act==="sync"){ e.preventDefault(); openSync(p); }
   if(b.dataset.act==="lines"){ setTimeout(()=>{ const el=document.getElementById("s-"+p.id); if(el) el.scrollIntoView({block:"start"}); },50); }
 });
@@ -406,6 +423,16 @@ function saveFile(blob, name){
   const a=document.createElement("a"); const u=URL.createObjectURL(blob);
   a.href=u; a.download=name; a.rel="noopener"; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(u), 60000);
+}
+const TURLS=new WeakMap();
+const takeURL = t => { if(!TURLS.has(t)) TURLS.set(t, URL.createObjectURL(t.blob)); return TURLS.get(t); };
+async function sendTake(p, key){
+  const tk=S.takes[p.id]||[]; const j=tk.findIndex(t=>t.key===key); if(j<0) return; const t=tk[j];
+  const name=clipFileName(p,t).replace(/(\.[a-z0-9]+)$/i, "-take"+(j+1)+"$1");
+  const file=new File([t.blob], name, {type:t.blob.type||"video/mp4"});
+  try{ if(navigator.canShare && navigator.canShare({files:[file]})) await navigator.share({files:[file], title:name}); else saveFile(t.blob, name); }
+  catch(e){ if(e && e.name==="AbortError") return; saveFile(t.blob, name); }
+  t.sent=true; try{ await idb("readwrite", st=>st.put(t,key)); }catch(_){} renderRail();
 }
 async function sendClip(p){
   const c=S.clips[p.id]; if(!c) return;
@@ -449,7 +476,8 @@ async function addFile(p, file, marks){
   S.busy[p.id]={label:"Adding video…",p:null}; delete S.errors[p.id]; renderRail();
   try{
     const d=await durationOf(file);
-    await saveClip(p.id, {blob:file, type:file.type, durationSec:Math.round(d), marks:marks||[], at:Date.now(), sent:false});
+    const c={blob:file, type:file.type, durationSec:Math.round(d), marks:marks||[], at:Date.now(), sent:false};
+    if(S.clips[p.id]) await addTake(p.id, c); else await saveClip(p.id, c);
   }catch(e){ S.errors[p.id]=(e&&e.message)||"Couldn't add that video."; }
   delete S.busy[p.id]; renderRail();
 }
@@ -516,7 +544,7 @@ async function startCamera(){
       new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),15000))
     ]);
     R.stream=s; const cam=$("#cam"); cam.srcObject=s; cam.muted=true; cam.controls=false; cam.removeAttribute("src"); await cam.play().catch(()=>{});
-    $("#rec-msg").textContent="Frame yourself, then press Start. Your lines are on the right.";
+    $("#rec-msg").textContent="Frame yourself, then press Start. Your lines are "+(matchMedia("(max-width:640px)").matches?"below the camera.":"on the right.");
     setRecActions([["Start recording", startRec, true]]);
   }catch(e){
     fallback(e&&e.name==="NotAllowedError" ? "Camera access was blocked. Allow the camera and microphone for this site in your browser settings, or use your device camera instead." : "The camera couldn't start. Use your device camera instead.");
@@ -554,7 +582,8 @@ function startRec(){
 async function useTake(){
   const p=R.part, blob=R.blob, dur=R.dur, marks=R.takeMarks||[]; closeRecorder();
   if(!blob) return;
-  await saveClip(p.id, {blob, type:blob.type, durationSec:Math.round(dur), marks, at:Date.now(), sent:false});
+  const c={blob, type:blob.type, durationSec:Math.round(dur), marks, at:Date.now(), sent:false};
+  if(S.clips[p.id]) await addTake(p.id, c); else await saveClip(p.id, c);
   renderRail();
 }
 function stopStream(){ if(R.stream){ R.stream.getTracks().forEach(t=>t.stop()); R.stream=null; } }
@@ -709,9 +738,25 @@ function renderScript(){
 $("#filters").addEventListener("click",e=>{ const b=e.target.closest("[data-f]"); if(!b) return; S.filter=b.dataset.f; renderScript(); });
 
 (async function boot(){
-  route(); loadTeam(); renderTeamInputs(); renderScript(); renderRail();
+  S.takes={}; route(); loadTeam(); renderTeamInputs(); renderScript(); renderRail();
   IDB = await openDB(); await loadClips(); renderRail();
+  await loadGroupClips();
 })();
+/* Group clips: shared takes published in the clips/ folder next to this page. A take on this device always wins. */
+async function loadGroupClips(){
+  let man; try{ const r=await fetch("clips/manifest.json",{cache:"no-store"}); if(!r.ok) return; man=await r.json(); }catch(_){ return; }
+  const list=(man&&Array.isArray(man.clips))?man.clips:[];
+  await Promise.all(list.map(async it=>{
+    const p=PARTS.find(x=>x.id===it.part); if(!p || S.clips[p.id]) return;
+    S.busy[p.id]={label:"Loading the group's clip…",p:null}; renderRail();
+    try{
+      const r=await fetch("clips/"+encodeURIComponent(it.file)+"?v="+encodeURIComponent(it.v||""),{cache:"no-store"}); if(!r.ok) throw new Error();
+      const b=await r.blob(); const type=it.type||"video/mp4";
+      if(!S.clips[p.id]) S.clips[p.id]={blob:new Blob([b],{type}), type, durationSec:+it.durationSec||0, marks:Array.isArray(it.marks)?it.marks:[], at:0, sent:false, group:true};
+    }catch(_){ S.errors[p.id]="Couldn't load the group's clip for this part. Reload to try again."; }
+    delete S.busy[p.id]; renderRail();
+  }));
+}
 
 </script>
 </body>
