@@ -1,0 +1,52 @@
+{
+ "clips": [
+  {
+   "part": "p02",
+   "file": "BTP-Part02-Leader-biography.mp4",
+   "type": "video/mp4",
+   "durationSec": 35,
+   "marks": [],
+   "v": "1"
+  },
+  {
+   "part": "p06",
+   "file": "BTP-Part06-Scene-2-The-pass.mp4",
+   "type": "video/mp4",
+   "durationSec": 25,
+   "marks": [],
+   "v": "1"
+  },
+  {
+   "part": "p07",
+   "file": "BTP-Part07-Scene-3-The-owner-sit-down.mp4",
+   "type": "video/mp4",
+   "durationSec": 24,
+   "marks": [],
+   "v": "1"
+  },
+  {
+   "part": "p08",
+   "file": "BTP-Part08-Scene-4-Junior-kitchen.mp4",
+   "type": "video/mp4",
+   "durationSec": 18,
+   "marks": [],
+   "v": "1"
+  },
+  {
+   "part": "p09",
+   "file": "BTP-Part09-Scene-5-The-verdict.mp4",
+   "type": "video/mp4",
+   "durationSec": 3,
+   "marks": [],
+   "v": "1"
+  },
+  {
+   "part": "p10",
+   "file": "BTP-Part10-Six-lessons-and-wrap-up.mp4",
+   "type": "video/mp4",
+   "durationSec": 17,
+   "marks": [],
+   "v": "1"
+  }
+ ]
+}
