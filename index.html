@@ -183,7 +183,7 @@ video.clip{width:100%;max-width:420px;border-radius:8px;background:#000;display:
 
 <main class="wrap">
   <section id="v-record" class="view">
-    <p class="lead">Record the parts you're in, then tap <b>Send my clip</b> on each one to save the clip file and send it however your group shares files (text, email, Google Drive, Teams). Clips stay on this device until you delete them. Don't like a take? <b>Delete</b> clears it and <b>Record again</b> replaces it.</p>
+    <p class="lead">Record the parts you're in, then tap <b>Send my clip</b> on each one to save the clip file and send it however your group shares files (text, email, Google Drive, Teams). Clips stay on this device until you delete them. Parts that already have a clip show <b>Record my lines</b>: your take is saved next to it, goes into the video you build, and never replaces anyone's clip.</p>
     <div class="team" id="team">
       <div><label for="n-m1">Member 1 · Ramsay</label><input id="n-m1" data-m="m1" placeholder="Name" autocomplete="off"></div>
       <div><label for="n-m2">Member 2 · Anchor</label><input id="n-m2" data-m="m2" placeholder="Name" autocomplete="off"></div>
@@ -382,8 +382,8 @@ function renderRail(){
     if(c && p.slides && p.slides.length>1 && !b) body += '<div class="tiny">'+(c.marks&&c.marks.length>1?"Slide changes are timed.":"Slides switch at even intervals. Use <b>Time the slides</b> to match them to what you say.")+'</div>';
     const tk=S.takes[p.id]||[];
     if(tk.length && !b){
-      body += '<div class="tiny">Extra takes are kept next to the clip above and never replace it. Tap <b>Send take</b> so they can be cut into this part.</div>';
-      tk.forEach((t,j)=>{ body += '<div class="status ok">Your take '+(j+1)+' · '+fmt(t.durationSec)+' · '+(t.blob.size/MB).toFixed(1)+' MB'+(t.sent?' · sent':'')+'</div><video class="clip" controls playsinline preload="metadata" src="'+takeURL(t)+'"></video><div class="actions"><button class="btn" data-act="sendtake" data-id="'+p.id+'" data-key="'+esc(t.key)+'">'+ICON_SEND+'Send take</button><button class="btn danger" data-act="droptake" data-id="'+p.id+'" data-key="'+esc(t.key)+'">'+ICON_DEL+'<span>Delete take</span></button></div>'; });
+      body += '<div class="tiny">Extra takes are kept next to the clip above and never replace it. They go into the video you build on this device; pick where each one plays.</div>';
+      tk.forEach((t,j)=>{ body += '<div class="status ok">Your take '+(j+1)+' · '+fmt(t.durationSec)+' · '+(t.blob.size/MB).toFixed(1)+' MB'+(t.sent?' · sent':'')+'</div><video class="clip" controls playsinline preload="metadata" src="'+takeURL(t)+'"></video>'+placeSelect(p.id,t,t.key)+'<div class="actions"><button class="btn" data-act="sendtake" data-id="'+p.id+'" data-key="'+esc(t.key)+'">'+ICON_SEND+'Send take</button><button class="btn danger" data-act="droptake" data-id="'+p.id+'" data-key="'+esc(t.key)+'">'+ICON_DEL+'<span>Delete take</span></button></div>'; });
     }
     if(err) body += '<p class="err">'+esc(err)+'</p>';
     if(!b){
@@ -404,6 +404,7 @@ function renderRail(){
 }
 function renderTeamInputs(){ document.querySelectorAll("#team input").forEach(inp => { if(document.activeElement!==inp) inp.value = S.team[inp.dataset.m]||""; }); }
 $("#team").addEventListener("input", e => { const m=e.target.dataset.m; if(!m) return; S.team[m]=e.target.value.slice(0,40); saveTeam(); renderScript(); clearTimeout(renderTeamInputs.t); renderTeamInputs.t=setTimeout(renderRail,400); });
+$("#rail").addEventListener("change", async e => { const s=e.target.closest("[data-place]"); if(!s) return; const t=(S.takes[s.dataset.id]||[]).find(x=>x.key===s.dataset.place); if(!t) return; t.place=s.value; renderOrder(); try{ await idb("readwrite", st=>st.put(t,t.key)); }catch(_){} });
 $("#rail").addEventListener("click", e => {
   const b = e.target.closest("[data-act]"); if(!b) return;
   const p = PARTS.find(x=>x.id===b.dataset.id);
@@ -616,11 +617,25 @@ function openSync(p){
 
 /* ---------- merge ---------- */
 const M = {running:false, stop:false, blob:null};
+const takeSrc=t=>takeURL(t), mainSrc=id=>clipURL(id), clipsLoading=()=>!!S.loadingGroup||Object.keys(S.busy).length>0;
+/* Every clip in play order: each part's main clip plus its extra takes (before or after it, unless left out). */
+function buildSegs(){
+  return PARTS.flatMap((p,i)=>{
+    const c=S.clips[p.id]; const tk=(S.takes[p.id]||[]).map((t,j)=>({p,i,c:t,url:takeSrc(t),name:"take "+(j+1),place:t.place||"after"}));
+    const main=c?[{p,i,c,url:mainSrc(p.id),name:""}]:[];
+    const all=[...tk.filter(x=>x.place==="before"),...main,...tk.filter(x=>x.place==="after")];
+    all.forEach((x,k)=>{ x.first=k===0; x.n=k+1; x.of=all.length; });
+    return all;
+  });
+}
+const placeSelect = (pid,t,key) => '<label class="tiny" style="display:block;margin:8px 0">In the video: <select data-place="'+esc(key)+'" data-id="'+pid+'">'+[["after","Plays after the main clip"],["before","Plays before the main clip"],["skip","Left out"]].map(([v,l])=>'<option value="'+v+'"'+((t.place||"after")===v?" selected":"")+'>'+l+'</option>').join("")+'</select></label>';
 function renderOrder(){
-  $("#order").innerHTML = PARTS.map((p,i)=>{ const c=S.clips[p.id]; return '<li id="o-'+p.id+'" class="'+(c?"":"missing")+'"><b>'+String(i+1).padStart(2,"0")+'</b> '+esc(p.title)+'<span class="t">'+(c?fmt(c.durationSec):"not added")+'</span></li>'; }).join("");
-  const n=PARTS.filter(p=>S.clips[p.id]).length;
-  $("#btn-build").disabled = M.running || n===0;
-  $("#btn-preview").disabled = M.running || n===0;
+  const segs=buildSegs();
+  $("#order").innerHTML = PARTS.map((p,i)=>{ const mine=segs.filter(x=>x.p===p), extra=mine.filter(x=>x.name).length; const sec=mine.reduce((a,x)=>a+(x.c.durationSec||0),0); return '<li id="o-'+p.id+'" class="'+(mine.length?"":"missing")+'"><b>'+String(i+1).padStart(2,"0")+'</b> '+esc(p.title)+(extra?' <span class="tiny">+ '+extra+' extra take'+(extra>1?"s":"")+'</span>':"")+'<span class="t">'+(mine.length?fmt(sec):"not added")+'</span></li>'; }).join("");
+  const waiting=clipsLoading();
+  $("#btn-build").disabled = M.running || waiting || !segs.length;
+  $("#btn-preview").disabled = M.running || waiting || !segs.length;
+  $("#btn-build").textContent = waiting ? "Loading clips…" : "Build the full video";
 }
 const CW=1280, CH=720;
 function drawFit(ctx, v){
@@ -653,16 +668,20 @@ function showMergeErr(t){ const e=$("#merge-err"); e.hidden=false; e.textContent
 function resetStage(){ const st=$("#stage"); if(!st.querySelector("canvas")) st.innerHTML='<canvas id="stage-canvas" width="1280" height="720"></canvas>'; }
 async function runMerge(record){
   if(M.running) return;
-  const list = PARTS.map((p,i)=>({p,i,c:S.clips[p.id]})).filter(x=>x.c);
+  const list = buildSegs();
   if(!list.length) return;
   const mime = record ? pickMime() : "";
   if(record && mime===null){ showMergeErr("This browser can't build videos. Open the app in Chrome or Edge on a laptop."); return; }
   $("#merge-err").hidden=true; $("#result").hidden=true;
   M.running=true; M.stop=false; renderOrder(); $("#btn-stop").hidden=false;
   const titles=$("#opt-titles").checked, useSlides=$("#opt-slides").checked, refs=$("#opt-refs").checked;
-  const hasCard = p => titles && !(useSlides && p.slides);
+  const hasCard = x => titles && x.first && !(useSlides && x.p.slides);
   const cv=$("#stage-canvas"), ctx=cv.getContext("2d");
   const ac=audioCtx(); const dest=ac.createMediaStreamDestination(); const mon=ac.createGain(); mon.connect(ac.destination);
+  /* One video element plays every clip. It is started inside the tap, so phones keep letting it play for the rest of the build. */
+  const v=document.createElement("video"); v.playsInline=true; v.setAttribute("playsinline",""); v.preload="auto"; v.src=list[0].url;
+  const src=ac.createMediaElementSource(v);
+  const unlock=v.play().then(()=>{ v.pause(); }).catch(()=>{});
   let rec=null, chunks=[], stopped=null;
   if(record){
     const stream=new MediaStream([...cv.captureStream(30).getVideoTracks(), ...dest.stream.getAudioTracks()]);
@@ -670,53 +689,79 @@ async function runMerge(record){
     rec.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
     stopped=new Promise(r=>rec.onstop=r);
   }
-  const total=(list.reduce((a,x)=>a+(x.c.durationSec||0)+(hasCard(x.p)?2:0),0)+(refs?5:0))||1;
-  let elapsed=0;
-  const vids=list.map(x=>{ const v=document.createElement("video"); v.playsInline=true; v.setAttribute("playsinline",""); v.preload="auto"; v.src=clipURL(x.p.id); return v; });
+  const recPause=()=>{ try{ if(rec&&rec.state==="recording") rec.pause(); }catch(_){} };
+  const recResume=()=>{ try{ if(rec&&rec.state==="paused"&&!document.hidden) rec.resume(); }catch(_){} };
+  const total=(list.reduce((a,x)=>a+(x.c.durationSec||0)+(hasCard(x)?2:0),0)+(refs?5:0))||1;
+  let elapsed=0, playing=false, lock=null; const skipped=[], builtParts=new Set();
   const label=(t)=>(record?"Building":"Previewing")+" · "+t;
+  const skip=(what,why)=>{ skipped.push(what); showMergeErr(skipped.length>1?"Skipped because they wouldn't load or play: "+skipped.join(", ")+".":what+" "+why); };
+  /* Leaving the tab freezes the picture, so hold everything until the tab is back in front. */
+  const onVis=()=>{ if(document.hidden){ recPause(); if(playing) v.pause(); } else { if(playing) v.play().catch(()=>{}); recResume(); } };
+  document.addEventListener("visibilitychange",onVis);
+  try{ if(navigator.wakeLock) navigator.wakeLock.request("screen").then(l=>{ if(M.running) lock=l; else l.release(); }).catch(()=>{}); }catch(_){}
+  const hold=(sec,draw)=>new Promise(res=>{ let t=0, last=performance.now(); const tick=()=>{ const now=performance.now(); t+=Math.min(0.5,(now-last)/1000); last=now; draw(t); if(t>=sec||M.stop){ res(); return; } requestAnimationFrame(tick); }; requestAnimationFrame(tick); });
+  const within=(pr,ms)=>Promise.race([pr,new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),ms))]);
   try{
     if(useSlides && list[0].p.slides) drawSlideFrame(ctx,null,list[0].p.slides[0]); else drawCard(ctx, list[0].p, list[0].i, 0);
+    await within(unlock,8000).catch(()=>{}); v.pause();
+    src.connect(dest); src.connect(mon);
     if(rec) rec.start(1000);
     for(let k=0;k<list.length && !M.stop;k++){
-      const {p,i,c}=list[k], v=vids[k];
+      const x=list[k], {p,i,c}=x;
+      const what="Part "+(i+1)+(x.name?" "+x.name:"");
+      const name="part "+(i+1)+": "+p.title+(x.of>1?" ("+x.n+" of "+x.of+")":"")+" · clip "+(k+1)+" of "+list.length;
       document.querySelectorAll("#order li").forEach(li=>li.classList.toggle("now", li.id==="o-"+p.id));
-      if(hasCard(p)){
-        const t0=performance.now();
-        await new Promise(res=>{ const tick=()=>{ const t=(performance.now()-t0)/1000; drawCard(ctx,p,i,Math.min(1,t/0.4)); mergeProg(label("part "+(i+1)+": "+p.title), (elapsed+t)/total); if(t>=2||M.stop){ res(); return; } requestAnimationFrame(tick); }; requestAnimationFrame(tick); });
+      if(hasCard(x)){
+        await hold(2, t=>{ drawCard(ctx,p,i,Math.min(1,t/0.4)); mergeProg(label(name), (elapsed+t)/total); });
         elapsed+=2;
       }
       if(M.stop) break;
-      try{ if(v.readyState<3) await waitFor(v,"canplay",45000); }
-      catch(e){ showMergeErr("Part "+(i+1)+" couldn't load, so it was skipped."); continue; }
-      const src=ac.createMediaElementSource(v); src.connect(dest); src.connect(mon);
-      const dur=(isFinite(v.duration)&&v.duration>0)?v.duration:(c.durationSec||1);
-      let ended=false; v.onended=()=>{ended=true;};
-      try{ await v.play(); }catch(e){ src.disconnect(); showMergeErr("Part "+(i+1)+" wouldn't play, so it was skipped."); continue; }
+      let dur=c.durationSec||1;
+      try{
+        if(k>0 || v.error){ v.src=x.url; v.load(); } else { try{ v.currentTime=0; }catch(_){} }
+        playing=true; await within(v.play(),45000);
+      }catch(e){
+        if(!document.hidden){ playing=false; v.pause(); skip(what, e&&e.message==="timeout"?"couldn't load, so it was skipped.":"wouldn't play, so it was skipped."); continue; }
+      }
+      if(isFinite(v.duration)&&v.duration>0) dur=v.duration;
       const slideOn = useSlides && p.slides;
-      await new Promise(res=>{ const tick=()=>{ if(slideOn) drawSlideFrame(ctx,v,slideAt(p,c,v.currentTime)); else drawFit(ctx,v); mergeProg(label("part "+(i+1)+": "+p.title), (elapsed+Math.min(v.currentTime,dur))/total); if(ended||v.ended||M.stop){ res(); return; } requestAnimationFrame(tick); }; requestAnimationFrame(tick); });
-      v.pause(); src.disconnect(); elapsed+=dur;
+      const paint=()=>{ if(slideOn) drawSlideFrame(ctx,v,slideAt(p,c,v.currentTime)); else drawFit(ctx,v); };
+      paint();
+      let stuck=false, lastT=-1, lastMove=performance.now(), lastTick=performance.now();
+      await new Promise(res=>{ const tick=()=>{ paint(); mergeProg(label(name), (elapsed+Math.min(v.currentTime,dur))/total);
+        const now=performance.now(); if(now-lastTick>1000) lastMove=now; lastTick=now;
+        if(v.currentTime!==lastT){ lastT=v.currentTime; lastMove=now; } else if(now-lastMove>15000){ stuck=true; }
+        if(v.ended||v.error||stuck||M.stop){ res(); return; } requestAnimationFrame(tick); }; requestAnimationFrame(tick); });
+      playing=false; v.pause();
+      if((stuck||v.error) && !M.stop) skip(what, "stopped partway, so the rest of it was skipped.");
+      builtParts.add(p.id); elapsed+=stuck?v.currentTime:dur;
     }
+    recResume();
     if(refs && !M.stop){
-      const t0=performance.now();
-      await new Promise(res=>{ const tick=()=>{ const t=(performance.now()-t0)/1000; drawSlideFrame(ctx,null,REF_SLIDE); mergeProg(label("References"), (elapsed+t)/total); if(t>=5||M.stop){ res(); return; } requestAnimationFrame(tick); }; requestAnimationFrame(tick); });
+      await hold(5, t=>{ drawSlideFrame(ctx,null,REF_SLIDE); mergeProg(label("References"), (elapsed+t)/total); });
       elapsed+=5;
     }
     if(!M.stop){ ctx.fillStyle="#000"; ctx.fillRect(0,0,CW,CH); await new Promise(r=>setTimeout(r,600)); }
   } finally {
-    if(rec){ if(rec.state!=="inactive") rec.stop(); await stopped; }
-    vids.forEach(v=>{ v.pause(); v.removeAttribute("src"); v.load(); });
-    mon.disconnect();
+    document.removeEventListener("visibilitychange",onVis);
+    if(lock) lock.release().catch(()=>{});
+    if(rec && rec.state!=="inactive"){ rec.stop(); await stopped; }
+    v.pause(); v.removeAttribute("src"); v.load(); src.disconnect(); mon.disconnect();
     M.running=false; $("#btn-stop").hidden=true;
     document.querySelectorAll("#order li").forEach(li=>li.classList.remove("now"));
     renderOrder();
   }
   if(record && !M.stop){
     M.blob=new Blob(chunks,{type:baseType(rec.mimeType||mime)||"video/webm"});
+    if(M.url) URL.revokeObjectURL(M.url);
+    M.url=URL.createObjectURL(M.blob);
     mergeProg("Done", 1);
     $("#result").hidden=false;
-    { const miss=PARTS.map((q,k)=>({q,k})).filter(x=>!S.clips[x.q.id]); $("#result-title").textContent = miss.length ? "Draft video ready ("+(PARTS.length-miss.length)+" of "+PARTS.length+" parts)" : "Your full video is ready"; $("#result-note").textContent = miss.length ? "Still missing: "+miss.map(x=>"Part "+(x.k+1)+" ("+x.q.title+")").join(", ")+". Add or re-record parts any time, then tap Build the full video again." : "All 10 parts are in. Re-record any part and build again if you want to change it."; }
+    const n=builtParts.size, miss=PARTS.map((q,k)=>({q,k})).filter(x=>!builtParts.has(x.q.id));
+    $("#result-title").textContent = miss.length ? "Draft video ready ("+n+" of "+PARTS.length+" parts)" : "Your full video is ready";
+    $("#result-note").textContent = (list.length-skipped.length)+" of "+list.length+" clips are in it."+(skipped.length?" Skipped: "+skipped.join(", ")+".":"")+" "+(miss.length ? "Still missing: "+miss.map(x=>"Part "+(x.k+1)+" ("+x.q.title+")").join(", ")+". Add or re-record parts any time, then tap Build the full video again." : "All 10 parts are in. Re-record any part and build again if you want to change it.");
     $("#result-meta").textContent=fmt(elapsed)+" · "+(M.blob.size/MB).toFixed(0)+" MB · ."+extFor(M.blob.type);
-    const st=$("#stage"); st.innerHTML=""; const pv=document.createElement("video"); pv.controls=true; pv.playsInline=true; pv.src=URL.createObjectURL(M.blob); st.appendChild(pv);
+    const st=$("#stage"); st.innerHTML=""; const pv=document.createElement("video"); pv.controls=true; pv.playsInline=true; pv.src=M.url; st.appendChild(pv);
   } else if(M.stop){ mergeProg("Stopped", 0); }
   else { mergeProg("Preview finished", 1); }
 }
@@ -741,9 +786,9 @@ function renderScript(){
 $("#filters").addEventListener("click",e=>{ const b=e.target.closest("[data-f]"); if(!b) return; S.filter=b.dataset.f; renderScript(); });
 
 (async function boot(){
-  S.takes={}; route(); loadTeam(); renderTeamInputs(); renderScript(); renderRail();
+  S.takes={}; S.loadingGroup=true; route(); loadTeam(); renderTeamInputs(); renderScript(); renderRail();
   IDB = await openDB(); await loadClips(); renderRail();
-  await loadGroupClips();
+  try{ await loadGroupClips(); } finally { S.loadingGroup=false; renderRail(); renderOrder(); }
 })();
 /* Group clips: shared takes published in the clips/ folder next to this page. A take on this device always wins. */
 async function loadGroupClips(){
