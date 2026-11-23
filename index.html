@@ -208,6 +208,7 @@ video.clip{width:100%;max-width:420px;border-radius:8px;background:#000;display:
       <button class="btn" id="btn-preview">Preview in order</button>
       <button class="btn ghost" id="btn-stop" hidden>Stop</button>
     </div>
+    <p class="tiny" style="max-width:65ch;margin:8px 0 0">You can build any time, even with parts missing: missing parts are skipped and the progress bar shows which part is playing. Building never locks anything, so keep recording or adding parts and build again for an updated video.</p>
     <div class="prog" id="merge-prog" style="margin:12px 0" hidden>
       <span id="merge-label">Starting…</span>
       <div class="bar"><i id="merge-bar"></i></div>
@@ -215,7 +216,8 @@ video.clip{width:100%;max-width:420px;border-radius:8px;background:#000;display:
     <p class="err" id="merge-err" hidden></p>
     <div class="stage" id="stage"><canvas id="stage-canvas" width="1280" height="720"></canvas></div>
     <div id="result" hidden style="margin-top:16px">
-      <h2 style="font-size:20px;margin-bottom:8px">Your full video is ready</h2>
+      <h2 style="font-size:20px;margin-bottom:8px" id="result-title">Your full video is ready</h2>
+      <p class="tiny" id="result-note" style="margin:0 0 10px;max-width:65ch"></p>
       <div class="actions" style="margin-bottom:10px">
         <button class="btn primary" id="btn-download">Download video</button>
         <span class="tiny" id="result-meta"></span>
@@ -712,6 +714,7 @@ async function runMerge(record){
     M.blob=new Blob(chunks,{type:baseType(rec.mimeType||mime)||"video/webm"});
     mergeProg("Done", 1);
     $("#result").hidden=false;
+    { const miss=PARTS.map((q,k)=>({q,k})).filter(x=>!S.clips[x.q.id]); $("#result-title").textContent = miss.length ? "Draft video ready ("+(PARTS.length-miss.length)+" of "+PARTS.length+" parts)" : "Your full video is ready"; $("#result-note").textContent = miss.length ? "Still missing: "+miss.map(x=>"Part "+(x.k+1)+" ("+x.q.title+")").join(", ")+". Add or re-record parts any time, then tap Build the full video again." : "All 10 parts are in. Re-record any part and build again if you want to change it."; }
     $("#result-meta").textContent=fmt(elapsed)+" · "+(M.blob.size/MB).toFixed(0)+" MB · ."+extFor(M.blob.type);
     const st=$("#stage"); st.innerHTML=""; const pv=document.createElement("video"); pv.controls=true; pv.playsInline=true; pv.src=URL.createObjectURL(M.blob); st.appendChild(pv);
   } else if(M.stop){ mergeProg("Stopped", 0); }
