@@ -698,7 +698,7 @@ function earWorker(){
     onmessage=async e=>{ const {id,audio}=e.data; try{
       if(!pipe){ const T=await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2"); T.env.allowLocalModels=false;
         const files={}; pipe=await T.pipeline("automatic-speech-recognition","onnx-community/whisper-base.en_timestamped",{device:"wasm",dtype:"q8",progress_callback:p=>{ if(p.status==="progress"){ files[p.file]=[p.loaded,p.total]; let a=0,b=0; for(const k in files){ a+=files[k][0]; b+=files[k][1]; } postMessage({load:b?a/b:0}); } }}); }
-      const r=await pipe(audio,{return_timestamps:"word",chunk_length_s:30,stride_length_s:5});
+      const r=await pipe(audio,{return_timestamps:"word",max_new_tokens:Math.min(200,Math.round(audio.length/16000*7)+12),no_repeat_ngram_size:6});
       postMessage({id,words:(r.chunks||[]).map(c=>({t:c.text,a:c.timestamp[0],b:c.timestamp[1]}))});
     }catch(err){ postMessage({id,error:String(err&&err.message||err)}); } };`;
   const w=new Worker(URL.createObjectURL(new Blob([code],{type:"text/javascript"})),{type:"module"});
@@ -710,9 +710,19 @@ async function hear(url){
   if(EAR.cache.has(url)) return EAR.cache.get(url);
   const ab=await audioCtx().decodeAudioData(await (await fetch(url)).arrayBuffer());
   const off=new OfflineAudioContext(1,Math.ceil(ab.duration*16000),16000), s=off.createBufferSource(); s.buffer=ab; s.connect(off.destination); s.start();
-  const pcm=(await off.startRendering()).getChannelData(0).slice();
-  const id=++EAR.n, w=earWorker();
-  const words=await new Promise((res,rej)=>{ EAR.wait.set(id,[res,rej]); w.postMessage({id,audio:pcm},[pcm.buffer]); setTimeout(()=>{ if(EAR.wait.delete(id)) rej(new Error("timeout")); },300000); });
+  const pcm=(await off.startRendering()).getChannelData(0).slice(), words=[];
+  /* Send only the speech, in pieces under 28 seconds, with long silences squeezed out: silence makes the listener invent words. */
+  const L=await loudOf(url), st=0.02, runs=[]; let s0=-1, quiet=0;
+  for(let i=0;i<=L.db.length;i++){ if(i<L.db.length && L.db[i]>L.thr){ if(s0<0) s0=i; quiet=0; } else if(s0>=0 && (++quiet>=30 || i===L.db.length)){ runs.push([Math.max(0,s0*st-0.25),Math.min(ab.duration,(i-quiet+1)*st+0.3)]); s0=-1; quiet=0; } }
+  const speech=runs.filter(r=>r[1]-r[0]>0.75), jobs=[]; let cur=null, len=0;
+  speech.forEach(r=>{ for(let a=r[0];a<r[1]-0.05;a+=26){ const b=Math.min(r[1],a+26); if(!cur || len+(b-a)>28){ cur=[]; jobs.push(cur); len=0; } cur.push({a,b,at:len}); len+=b-a; } });
+  for(const job of jobs){
+    const last=job[job.length-1], buf=new Float32Array(Math.ceil((last.at+last.b-last.a)*16000)); job.forEach(q=>buf.set(pcm.subarray(Math.floor(q.a*16000),Math.floor(q.a*16000)+Math.floor((q.b-q.a)*16000)).subarray(0,buf.length-Math.floor(q.at*16000)),Math.floor(q.at*16000)));
+    const id=++EAR.n, w=earWorker();
+    const got=await new Promise((res,rej)=>{ EAR.wait.set(id,[res,rej]); w.postMessage({id,audio:buf},[buf.buffer]); setTimeout(()=>{ if(EAR.wait.delete(id)) rej(new Error("timeout")); },180000); });
+    const back=(t,end)=>{ let q=job[0]; for(const x of job) if(t>=x.at-(end?-0.02:0.05)) q=x; return Math.max(q.a,Math.min(q.b,q.a+(t-q.at))); };
+    got.forEach(x=>{ const a=back(x.a,false); words.push({t:x.t,a,b:Math.max(a+0.05,back(x.b==null?x.a+0.3:x.b,true))}); });
+  }
   EAR.cache.set(url,words); return words;
 }
 const NUMW=(()=>{ const m={}, o="zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split(" "), t={20:"twenty",30:"thirty",40:"forty",50:"fifty",60:"sixty",70:"seventy",80:"eighty",90:"ninety"}; o.forEach((w,i)=>m[i]=w); Object.assign(m,t); return m; })();
