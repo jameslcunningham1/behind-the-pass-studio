@@ -785,12 +785,14 @@ async function autoCut(pid){
   try{
     EAR.load=f=>say("Setting up the listener, first time only… "+Math.round(f*100)+"%");
     const res=[];
-    for(let k=0;k<srcs.length;k++){ say("Listening to "+srcs[k].label.toLowerCase()+" ("+(k+1)+" of "+srcs.length+")…"); const words=await hear(srcs[k].url), L=await loudOf(srcs[k].url), r=findLines(words,lines); r.found.all=r.heard; snapLines(r.found,L); res.push({s:srcs[k],n:k,r}); }
+    for(let k=0;k<srcs.length;k++){ say("Listening to "+srcs[k].label.toLowerCase()+" ("+(k+1)+" of "+srcs.length+")…"); const words=await hear(srcs[k].url), L=await loudOf(srcs[k].url), r=findLines(words,lines); r.found.all=r.heard; snapLines(r.found,L); res.push({s:srcs[k],n:k,r,L}); }
     /* For each script line keep the best reading: the main clip for its own lines, the newest take when takes compete. */
     const pick=new Map(); lines.forEach(l=>{ let best=null; res.forEach(x=>{ const f=x.r.found.find(q=>q.l===l.i); if(!f) return; if(!best){ best={x,f}; return; } const d=f.cov-best.f.cov; if(best.x.s.k==="main" ? d>0.25 : d>-0.2) best={x,f}; }); if(best) pick.set(l.i,best); });
     const old=cutRows(pid), zoomOf=k=>{ const o=old.find(q=>q.k===k&&q.z>1); if(o) return {z:o.z,fx:o.fx}; if(k==="main") return {}; for(const p2 in (S.cuts||{})){ const t=S.cuts[p2].find(q=>q.k!=="main"&&q.z>1); if(t) return {z:t.z,fx:t.fx}; } return {}; };
-    const rows=[]; lines.forEach(l=>{ const b=pick.get(l.i); if(!b) return; const k=b.x.s.k, last=rows[rows.length-1];
-      if(last && last.k===k && b.f.A>=last.a && b.f.A-last.b<1.2){ last.b=+b.f.B.toFixed(2); last.l.push(l.i); } else rows.push({k,a:+b.f.A.toFixed(2),b:+b.f.B.toFixed(2),l:[l.i],...zoomOf(k)}); });
+    const rows=[]; lines.forEach(l=>{ const b=pick.get(l.i); if(!b) return; const k=b.x.s.k;
+      /* squeeze dead air: a pause over 2 seconds inside a line becomes a quick cut */
+      const L=b.x.L, st=0.02, parts=[]; let from=b.f.A, q=0; for(let t=Math.floor(b.f.s/st); t<Math.ceil(b.f.e/st); t++){ if(L.db[t]>L.thr){ if(q*st>2){ parts.push([from,(t-q)*st+0.25]); from=t*st-0.2; } q=0; } else q++; } parts.push([from,b.f.B]);
+      parts.forEach((r,n)=>{ const last=rows[rows.length-1]; if(!n && last && last.k===k && r[0]>=last.a && r[0]-last.b<1.2){ last.b=+r[1].toFixed(2); last.l.push(l.i); } else rows.push({k,a:+r[0].toFixed(2),b:+r[1].toFixed(2),l:[l.i],...zoomOf(k)}); }); });
     const notes=[]; res.forEach(x=>{ const used=rows.some(q=>q.k===x.s.k); if(!used){ if(x.r.found.length) notes.push(x.s.label+" is left out because another clip has the same lines."); else { rows.push({k:x.s.k,a:0,b:0,...zoomOf(x.s.k)}); notes.push(x.s.label+" didn't match the script, so it plays at the end. Move it or leave it out."); } } });
     const miss=lines.filter(l=>!pick.has(l.i));
     setCut(pid,rows,true);
