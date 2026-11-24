@@ -69,6 +69,8 @@ section.view.on{display:block}
 .cutrow input[type=number]{width:70px;font:inherit;padding:4px 6px}
 .cutrow select{font:inherit;padding:4px 6px}
 .cutname{min-width:150px}
+.cutline{flex-basis:100%;order:-1;font-size:14px}
+#rail .cutrow .cutname{order:-2}
 .cutbtns{display:flex;flex-wrap:wrap;gap:6px}
 .cutbtns .btn{padding:5px 9px;font-size:13px}
 .ticket{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;grid-template-columns:44px 1fr;gap:4px 14px}
@@ -391,7 +393,7 @@ function renderRail(){
     if(c && p.slides && p.slides.length>1 && !b) body += '<div class="tiny">'+(c.marks&&c.marks.length>1?"Slide changes are timed.":"Slides switch at even intervals. Use <b>Time the slides</b> to match them to what you say.")+'</div>';
     const tk=S.takes[p.id]||[];
     if(tk.length && !b){
-      body += '<div class="tiny">Extra takes are kept next to the clip above and never replace it. They go into the video you build on this device. Use <b>Cut this scene together</b> to put your lines between theirs.</div>';
+      body += '<div class="tiny">Extra takes are kept next to the clip above and never replace it. They go into the video you build on this device. The app finds each line and cuts them in script order.</div>';
       tk.forEach((t,j)=>{ body += '<div class="status ok">Your take '+(j+1)+' · '+fmt(t.durationSec)+' · '+(t.blob.size/MB).toFixed(1)+' MB'+(t.sent?' · sent':'')+'</div><video class="clip" controls playsinline preload="metadata" src="'+takeURL(t)+'"></video>'+placeSelect(p.id,t,t.key)+'<div class="actions"><button class="btn" data-act="sendtake" data-id="'+p.id+'" data-key="'+esc(t.key)+'">'+ICON_SEND+'Send take</button><button class="btn danger" data-act="droptake" data-id="'+p.id+'" data-key="'+esc(t.key)+'">'+ICON_DEL+'<span>Delete take</span></button></div>'; });
     }
     if(!b) body += cutEditor(p);
@@ -597,7 +599,7 @@ async function useTake(){
   if(!blob) return;
   const c={blob, type:blob.type, durationSec:Math.round(dur), marks, at:Date.now(), sent:false};
   if(S.clips[p.id]) await addTake(p.id, c); else await saveClip(p.id, c);
-  renderRail();
+  renderRail(); if((S.takes[p.id]||[]).includes(c)) autoCutAfterTake(p.id);
 }
 function stopStream(){ if(R.stream){ R.stream.getTracks().forEach(t=>t.stop()); R.stream=null; } }
 function closeRecorder(){
@@ -629,10 +631,10 @@ function openSync(p){
 const M = {running:false, stop:false, blob:null};
 const takeSrc=t=>takeURL(t), mainSrc=id=>clipURL(id), clipsLoading=()=>!!S.loadingGroup||Object.keys(S.busy).length>0;
 const takeId=t=>t.key;
-function saveCuts(){ try{ localStorage.setItem("btp-cuts",JSON.stringify({cuts:Object.fromEntries(Object.entries(S.cuts||{}).filter(([k])=>!(S.cutAuto||{})[k])),seen:S.cutSeen||{},reset:S.cutReset||{}})); }catch(_){} }
-function loadCuts(){ try{ const x=JSON.parse(localStorage.getItem("btp-cuts")||"{}"); S.cuts=x.cuts||{}; S.cutSeen=x.seen||{}; S.cutReset=x.reset||{}; }catch(_){ S.cuts={}; S.cutSeen={}; S.cutReset={}; } }
+function saveCuts(){ try{ localStorage.setItem("btp-cuts",JSON.stringify({cuts:Object.fromEntries(Object.entries(S.cuts||{}).filter(([k])=>(S.cutAuto||{})[k]!==1)),auto:Object.fromEntries(Object.entries(S.cutAuto||{}).filter(([,v])=>v===2)),seen:S.cutSeen||{},reset:S.cutReset||{}})); }catch(_){} }
+function loadCuts(){ try{ const x=JSON.parse(localStorage.getItem("btp-cuts")||"{}"); S.cuts=x.cuts||{}; S.cutSeen=x.seen||{}; S.cutReset=x.reset||{}; S.cutAuto=x.auto||{}; }catch(_){ S.cuts={}; S.cutSeen={}; S.cutReset={}; } }
 /* Ready-made cuts published with the group clips. Used only until someone cuts that part on this device. */
-function groupCuts(list){ (list||[]).forEach(g=>{ if(!g||!S.clips[g.part]||!S.clips[g.part].group||(S.cuts[g.part]&&!(S.cutAuto||{})[g.part])||S.cutReset[g.part]) return; const t=(S.takes[g.part]||[]).find(x=>x.blob.size===g.takeBytes); const ps=t?g.pieces:g.mainOnly; if(!ps) return; S.cuts[g.part]=ps.map(x=>({...x,k:x.k==="take"?t.key:"main"})); S.cutSeen[g.part]=t?["main",t.key]:["main"]; (S.cutAuto=S.cutAuto||{})[g.part]=1; }); }
+function groupCuts(list){ (list||[]).forEach(g=>{ if(!g||!S.clips[g.part]||!S.clips[g.part].group||(S.cuts[g.part]&&(S.cutAuto||{})[g.part]!==1)||S.cutReset[g.part]) return; const t=(S.takes[g.part]||[]).find(x=>x.blob.size===g.takeBytes); const ps=t?g.pieces:g.mainOnly; if(!ps) return; S.cuts[g.part]=ps.map(x=>({...x,k:x.k==="take"?t.key:"main"})); S.cutSeen[g.part]=t?["main",t.key]:["main"]; (S.cutAuto=S.cutAuto||{})[g.part]=1; }); }
 /* ---------- cutting: the pieces of each part, in play order ---------- */
 const srcList = pid => { const out=[]; if(S.clips[pid]) out.push({k:"main",c:S.clips[pid],url:mainSrc(pid),label:"Main clip"}); (S.takes[pid]||[]).forEach((t,j)=>out.push({k:takeId(t),c:t,url:takeSrc(t),label:"Take "+(j+1),place:t.place||"after"})); return out; };
 const pieceEnd = (x,len) => (x.b>0 ? x.b : (len||0));
@@ -667,26 +669,128 @@ function renderOrder(){
   $("#btn-build").textContent = waiting ? "Loading clips…" : "Build the full video";
 }
 /* ---------- cut editor ---------- */
-const CUT={open:{}, msg:{}};
+const CUT={open:{}, msg:{}, busy:{}, undo:{}};
 const t1 = s => { s=Math.max(0,s||0); return Math.floor(s/60)+":"+(s%60<10?"0":"")+(s%60).toFixed(1); };
 function cutEditor(p){
   const srcs=srcList(p.id); if(!srcs.length) return "";
   const rows=cutRows(p.id), open=!!CUT.open[p.id];
-  let h='<div class="cutbox"><button class="btn" data-cut="toggle" data-id="'+p.id+'">'+(open?"Close scene cutting":"Cut this scene together"+(rows.length>1?" ("+rows.length+" pieces)":""))+'</button>';
+  const busy=CUT.busy[p.id], ls=scriptLines(p.id);
+  let h='<div class="cutbox"><div class="actions"><button class="btn'+(rows.length>1||srcs.length>1?" primary":"")+'" data-cut="auto" data-id="'+p.id+'"'+(busy?" disabled":"")+'>'+(busy?"Cutting…":"Cut this scene together")+'</button><button class="btn" data-cut="toggle" data-id="'+p.id+'">'+(open?"Close":"Change the cut")+(rows.length>1?" ("+rows.length+" pieces)":"")+'</button>'+(rows.length>1?'<button class="btn" data-cut="scene" data-id="'+p.id+'">Play this scene</button>':"")+(CUT.undo[p.id]&&!busy?'<button class="btn ghost" data-cut="undo" data-id="'+p.id+'">Undo the cut</button>':"")+'</div>'+(busy||CUT.msg[p.id]?'<p class="tiny" id="cutmsg-'+p.id+'" role="status">'+esc(busy||CUT.msg[p.id])+'</p>':"");
   if(open){
-    h+='<p class="tiny">These play top to bottom in the video. <b>Split at pauses</b> breaks a clip into its lines, the arrows put them in order, and the times trim them (in seconds). Nothing here changes or deletes the recordings.</p><video class="clip" id="cutv-'+p.id+'" controls playsinline preload="metadata" hidden></video>';
+    h+='<p class="tiny">These play top to bottom in the video. Use the arrows to reorder, the times (in seconds) to trim, and <b>Leave out</b> to drop a piece. Nothing here changes or deletes the recordings.</p><video class="clip" id="cutv-'+p.id+'" controls playsinline preload="metadata" hidden></video>';
     rows.forEach((x,n)=>{ const s=srcs.find(q=>q.k===x.k); const end=pieceEnd(x,s.c.durationSec), d=' data-id="'+p.id+'" data-n="'+n+'"';
-      h+='<div class="cutrow"><span class="cutname"><b>'+(n+1)+'.</b> '+esc(s.label)+' <span class="tiny">'+t1(end-(x.a||0))+' long</span></span>'+
+      h+='<div class="cutrow"><span class="cutname"><b>'+(n+1)+'.</b> '+esc(s.label)+' <span class="tiny">'+t1(end-(x.a||0))+' long</span></span>'+(x.l&&x.l.length?'<span class="cutline">'+x.l.map(n=>ls[n]?esc(ls[n].who+": "+ls[n].txt.replace(/\([^)]*\)\s*/g,"")):"").join(" / ")+'</span>':"")+
         '<label>from <input type="number" step="0.1" min="0" value="'+(x.a||0).toFixed(1)+'" data-cutf="a"'+d+'></label><label>to <input type="number" step="0.1" min="0" value="'+end.toFixed(1)+'" data-cutf="b"'+d+'></label>'+
         '<label>zoom <select data-cutf="z"'+d+'>'+[[1,"off"],[1.25,"a little"],[1.5,"close"],[1.8,"closer"]].map(([v,l])=>'<option value="'+v+'"'+((x.z||1)===v?" selected":"")+'>'+l+'</option>').join("")+'</select></label>'+
         ((x.z||1)>1?'<label>on <select data-cutf="fx"'+d+'>'+[[0.35,"left"],[0.5,"middle"],[0.65,"right"]].map(([v,l])=>'<option value="'+v+'"'+(Math.abs((x.fx==null?0.5:x.fx)-v)<0.08?" selected":"")+'>'+l+'</option>').join("")+'</select></label>':"")+
         '<span class="cutbtns"><button class="btn" data-cut="play"'+d+'>Play</button><button class="btn" data-cut="up"'+d+(n?"":" disabled")+' aria-label="Move up">↑</button><button class="btn" data-cut="down"'+d+(n<rows.length-1?"":" disabled")+' aria-label="Move down">↓</button><button class="btn" data-cut="split"'+d+'>Split at pauses</button><button class="btn" data-cut="drop"'+d+'>Leave out</button></span></div>'; });
-    h+='<div class="actions"><button class="btn primary" data-cut="scene" data-id="'+p.id+'">Play this scene</button>'+srcs.map(s=>'<button class="btn" data-cut="add" data-k="'+esc(s.k)+'" data-id="'+p.id+'">Add '+esc(s.label.toLowerCase())+'</button>').join("")+'<button class="btn ghost" data-cut="reset" data-id="'+p.id+'">Start over</button></div>';
+    h+='<div class="actions">'+srcs.map(s=>'<button class="btn" data-cut="add" data-k="'+esc(s.k)+'" data-id="'+p.id+'">Add '+esc(s.label.toLowerCase())+'</button>').join("")+'<button class="btn ghost" data-cut="reset" data-id="'+p.id+'">Start over</button></div>';
   }
-  if(CUT.msg[p.id]) h+='<p class="tiny">'+esc(CUT.msg[p.id])+'</p>';
   return h+'</div>';
 }
-function setCut(pid, rows){ S.cuts=S.cuts||{}; S.cutSeen=S.cutSeen||{}; if(S.cutAuto) delete S.cutAuto[pid]; if(rows){ S.cuts[pid]=rows; S.cutSeen[pid]=srcList(pid).map(s=>s.k); } else { delete S.cuts[pid]; delete S.cutSeen[pid]; S.cutReset=Object.assign({},S.cutReset,{[pid]:1}); } saveCuts(); renderRail(); }
+function setCut(pid, rows, auto){ S.cuts=S.cuts||{}; S.cutSeen=S.cutSeen||{}; S.cutAuto=S.cutAuto||{}; if(auto) S.cutAuto[pid]=2; else delete S.cutAuto[pid]; if(rows){ S.cuts[pid]=rows; S.cutSeen[pid]=srcList(pid).map(s=>s.k); } else { delete S.cuts[pid]; delete S.cutSeen[pid]; S.cutReset=Object.assign({},S.cutReset,{[pid]:1}); } saveCuts(); renderRail(); }
+/* ---------- automatic cutting: hear each clip, match it to the script, put the lines in script order ---------- */
+const EAR={w:null,n:0,wait:new Map(),cache:new Map(),load:null};
+function earWorker(){
+  if(EAR.w) return EAR.w;
+  const code=`
+    let pipe=null;
+    onmessage=async e=>{ const {id,audio}=e.data; try{
+      if(!pipe){ const T=await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2"); T.env.allowLocalModels=false;
+        const files={}; pipe=await T.pipeline("automatic-speech-recognition","onnx-community/whisper-base.en_timestamped",{device:"wasm",dtype:"q8",progress_callback:p=>{ if(p.status==="progress"){ files[p.file]=[p.loaded,p.total]; let a=0,b=0; for(const k in files){ a+=files[k][0]; b+=files[k][1]; } postMessage({load:b?a/b:0}); } }}); }
+      const r=await pipe(audio,{return_timestamps:"word",chunk_length_s:30,stride_length_s:5});
+      postMessage({id,words:(r.chunks||[]).map(c=>({t:c.text,a:c.timestamp[0],b:c.timestamp[1]}))});
+    }catch(err){ postMessage({id,error:String(err&&err.message||err)}); } };`;
+  const w=new Worker(URL.createObjectURL(new Blob([code],{type:"text/javascript"})),{type:"module"});
+  w.onmessage=e=>{ const d=e.data; if(d.load!=null){ if(EAR.load) EAR.load(d.load); return; } const p=EAR.wait.get(d.id); EAR.wait.delete(d.id); if(!p) return; d.error?p[1](new Error(d.error)):p[0](d.words); };
+  w.onerror=()=>{ EAR.wait.forEach(p=>p[1](new Error("worker"))); EAR.wait.clear(); EAR.w=null; };
+  return EAR.w=w;
+}
+async function hear(url){
+  if(EAR.cache.has(url)) return EAR.cache.get(url);
+  const ab=await audioCtx().decodeAudioData(await (await fetch(url)).arrayBuffer());
+  const off=new OfflineAudioContext(1,Math.ceil(ab.duration*16000),16000), s=off.createBufferSource(); s.buffer=ab; s.connect(off.destination); s.start();
+  const pcm=(await off.startRendering()).getChannelData(0).slice();
+  const id=++EAR.n, w=earWorker();
+  const words=await new Promise((res,rej)=>{ EAR.wait.set(id,[res,rej]); w.postMessage({id,audio:pcm},[pcm.buffer]); setTimeout(()=>{ if(EAR.wait.delete(id)) rej(new Error("timeout")); },300000); });
+  EAR.cache.set(url,words); return words;
+}
+const NUMW=(()=>{ const m={}, o="zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split(" "), t={20:"twenty",30:"thirty",40:"forty",50:"fifty",60:"sixty",70:"seventy",80:"eighty",90:"ninety"}; o.forEach((w,i)=>m[i]=w); Object.assign(m,t); return m; })();
+const ALIAS={jeff:"chef",chief:"chef",shelf:"chef",chefs:"chef",dads:"dads"};
+function normWords(s){ return String(s).toLowerCase().replace(/[’']/g,"").replace(/[^a-z0-9]+/g," ").trim().split(" ").filter(Boolean).map(w=>NUMW[w]||ALIAS[w]||w); }
+function near(a,b){ if(a===b) return true; const n=a.length,m=b.length; if(Math.min(n,m)<4||Math.abs(n-m)>2) return false; let p=[...Array(m+1).keys()]; for(let i=1;i<=n;i++){ const q=[i]; for(let j=1;j<=m;j++) q[j]=Math.min(p[j]+1,q[j-1]+1,p[j-1]+(a[i-1]===b[j-1]?0:1)); p=q; } return p[m]<=(Math.max(n,m)>=7?2:1); }
+function scriptLines(pid){ return (SCRIPT[pid]||[]).filter(l=>l[0]!=="dir").map(([r,who,txt],i)=>({i,r,who,txt,words:normWords(txt.replace(/\([^)]*\)/g," "))})); }
+/* Best in-order match of heard words to script words; skipping script lines is cheap, skipping heard words costs a little. */
+function alignWords(heard, script){
+  const n=heard.length,m=script.length, W=m+1, sc=new Float32Array((n+1)*W), mv=new Uint8Array((n+1)*W);
+  for(let i=1;i<=n;i++){ sc[i*W]=sc[(i-1)*W]-0.25; mv[i*W]=2; }
+  for(let j=1;j<=m;j++){ sc[j]=sc[j-1]-0.03; mv[j]=3; }
+  for(let i=1;i<=n;i++) for(let j=1;j<=m;j++){
+    const hit=near(heard[i-1].w,script[j-1].w); let d=sc[(i-1)*W+j-1]+(hit?1+(heard[i-1].w.length>3?0.4:0):-0.7);
+    if(hit && i>1 && j>1 && mv[(i-1)*W+j-1]===1 && near(heard[i-2].w,script[j-2].w)) d+=0.5;
+    const u=sc[(i-1)*W+j]-0.25, l=sc[i*W+j-1]-0.03; let best=d,k=1; if(u>best){best=u;k=2;} if(l>best){best=l;k=3;} sc[i*W+j]=best; mv[i*W+j]=k; }
+  const out=[]; let i=n,j=m; while(i>0||j>0){ const k=mv[i*W+j]; if(k===1){ if(near(heard[i-1].w,script[j-1].w)) out.push([i-1,j-1]); i--; j--; } else if(k===2) i--; else j--; }
+  return out.reverse();
+}
+/* Which script lines a clip contains, and where. */
+function findLines(words, lines){
+  const heard=[]; words.forEach(x=>normWords(x.t).forEach(w=>heard.push({w,a:x.a,b:x.b==null?x.a+0.3:x.b})));
+  const found=new Map(); let use=heard.map((_,k)=>k), todo=lines;
+  for(let pass=0;pass<3 && use.length && todo.length;pass++){
+    const script=todo.flatMap(l=>l.words.map((w,wi)=>({w,l:l.i,wi}))), hit=new Map(), at=new Map();
+    alignWords(use.map(k=>heard[k]),script).forEach(([h,s])=>{ const l=script[s].l; if(!hit.has(l)) hit.set(l,[]); hit.get(l).push(use[h]); at.set(use[h],script[s].wi); });
+    let got=false; const taken=new Set();
+    todo.forEach(l=>{ const hs=hit.get(l.i); if(!hs) return; const cov=hs.length/l.words.length; if(!(cov>=0.5 || (hs.length>=4 && cov>=0.3))) return;
+      /* keep the dense run of matches: drop strays far from the rest */
+      const mid=hs[hs.length>>1]; const keep=hs.filter(k=>Math.abs(k-mid)<=l.words.length*1.6+2); let a=keep[0], b=keep[keep.length-1];
+      /* a word that also appears in a neighboring line can get credited there; take it back when it belongs to this one */
+      const free=k=>k>=0&&k<heard.length&&use.includes(k)&&!taken.has(k); let wi=at.get(a); while(wi>0 && free(a-1) && near(heard[a-1].w,l.words[wi-1])){ a--; wi--; } wi=at.get(b); while(wi<l.words.length-1 && free(b+1) && near(heard[b+1].w,l.words[wi+1])){ b++; wi++; }
+      found.set(l.i,{l:l.i,cov:keep.length/l.words.length,a,b,ta:heard[a].a,tae:heard[a].b,tb:heard[b].b,tbs:heard[b].a}); for(let k=a;k<=b;k++) taken.add(k); got=true; });
+    if(!got) break;
+    use=use.filter(k=>!taken.has(k)); todo=todo.filter(l=>!found.has(l.i));
+  }
+  const inside=new Set(); found.forEach(f=>{ for(let k=f.a;k<=f.b;k++) inside.add(k); });
+  return {found:[...found.values()].sort((x,y)=>x.a-y.a), stray:heard.length-inside.size, heard};
+}
+/* Tidy each line's start and end to the quiet around it. */
+function snapLines(F, L){
+  const st=0.02, N=L.db.length, loud=i=>i>=0&&i<N&&L.db[i]>L.thr;
+  /* nearest speech to a moment, looking back first: the listener's times run a touch late */
+  const seek=(t,lo,hi)=>{ const c=Math.round(t/st); for(let d=0;d<45;d++){ if((c-d)*st>=lo-0.01 && loud(c-d)) return c-d; if(d*st<=0.8 && d>6 && (c+d-6)*st<=hi && loud(c+d-6)) return c+d-6; } return c; };
+  F.forEach((f,n)=>{ const prev=F[n-1], next=F[n+1], hd=F.heard||[];
+    const lo=Math.max(0, f.a>0&&F.all ? F.all[f.a-1].a : 0), hi=Math.min(N*st, F.all&&f.b<F.all.length-1 ? F.all[f.b+1].a : N*st);
+    let i=seek(Math.max((f.ta+f.tae)/2, f.tae-0.22), lo, f.tae+0.8);
+    let q=0, s=i; for(let k=i;k>=lo/st;k--){ if(loud(k)){ s=k; q=0; } else if(++q>=6) break; }
+    let j=seek((f.tbs+Math.min(f.tb,f.tbs+0.5))/2, f.s==null?0:f.s, hi);
+    let e=j; q=0; for(let k=j;k<=hi/st && k<N;k++){ if(loud(k)){ e=k; q=0; } else if(++q>=15) break; }
+    f.s=s*st; f.e=(e+1)*st; });
+  F.forEach((f,n)=>{ const prev=F[n-1], next=F[n+1]; if(next && f.e>next.s){ const m=(f.e+next.s)/2; f.e=m; next.s=m; } });
+  F.forEach((f,n)=>{ const prev=F[n-1], next=F[n+1]; f.A=Math.max(0, f.s-Math.min(0.16, prev?Math.max(0,(f.s-prev.e)/2):0.16)); f.B=Math.min(L.dur, f.e+Math.min(0.22, next?Math.max(0,(next.s-f.e)/2):0.22)); });
+}
+async function autoCut(pid){
+  if(CUT.busy[pid]) return; const srcs=srcList(pid).filter(s=>s.place!=="skip"), lines=scriptLines(pid); if(!srcs.length||!lines.length) return;
+  const say=t=>{ CUT.busy[pid]=t; const el=document.getElementById("cutmsg-"+pid); if(el) el.textContent=t; else renderRail(); };
+  CUT.undo[pid]=(S.cuts&&S.cuts[pid])?{rows:S.cuts[pid],seen:(S.cutSeen||{})[pid],auto:(S.cutAuto||{})[pid]}:null;
+  say("Getting ready to listen…"); renderRail();
+  try{
+    EAR.load=f=>say("Setting up the listener, first time only… "+Math.round(f*100)+"%");
+    const res=[];
+    for(let k=0;k<srcs.length;k++){ say("Listening to "+srcs[k].label.toLowerCase()+" ("+(k+1)+" of "+srcs.length+")…"); const words=await hear(srcs[k].url), L=await loudOf(srcs[k].url), r=findLines(words,lines); r.found.all=r.heard; snapLines(r.found,L); res.push({s:srcs[k],n:k,r}); }
+    /* For each script line keep the best reading: the main clip for its own lines, the newest take when takes compete. */
+    const pick=new Map(); lines.forEach(l=>{ let best=null; res.forEach(x=>{ const f=x.r.found.find(q=>q.l===l.i); if(!f) return; if(!best){ best={x,f}; return; } const d=f.cov-best.f.cov; if(best.x.s.k==="main" ? d>0.25 : d>-0.2) best={x,f}; }); if(best) pick.set(l.i,best); });
+    const old=cutRows(pid), zoomOf=k=>{ const o=old.find(q=>q.k===k&&q.z>1); if(o) return {z:o.z,fx:o.fx}; if(k==="main") return {}; for(const p2 in (S.cuts||{})){ const t=S.cuts[p2].find(q=>q.k!=="main"&&q.z>1); if(t) return {z:t.z,fx:t.fx}; } return {}; };
+    const rows=[]; lines.forEach(l=>{ const b=pick.get(l.i); if(!b) return; const k=b.x.s.k, last=rows[rows.length-1];
+      if(last && last.k===k && b.f.A>=last.a && b.f.A-last.b<1.2){ last.b=+b.f.B.toFixed(2); last.l.push(l.i); } else rows.push({k,a:+b.f.A.toFixed(2),b:+b.f.B.toFixed(2),l:[l.i],...zoomOf(k)}); });
+    const notes=[]; res.forEach(x=>{ const used=rows.some(q=>q.k===x.s.k); if(!used){ if(x.r.found.length) notes.push(x.s.label+" is left out because another clip has the same lines."); else { rows.push({k:x.s.k,a:0,b:0,...zoomOf(x.s.k)}); notes.push(x.s.label+" didn't match the script, so it plays at the end. Move it or leave it out."); } } });
+    const miss=lines.filter(l=>!pick.has(l.i));
+    setCut(pid,rows,true);
+    CUT.msg[pid]="Cut in script order: "+(lines.length-miss.length)+" of "+lines.length+" lines found."+(miss.length?" Still to record: "+miss.map(l=>l.who+" “"+l.txt.replace(/\([^)]*\)\s*/g,"").split(" ").slice(0,5).join(" ")+"…”").join("; ")+".":"")+(notes.length?" "+notes.join(" "):"");
+    CUT.open[pid]=true;
+  }catch(err){ console.error("autocut",err); CUT.msg[pid]="Couldn't listen to the clips ("+(err&&err.message==="timeout"?"it took too long":"the listener didn't load; check the internet connection")+"). Try again, or use Split at pauses below."; CUT.open[pid]=true; }
+  delete CUT.busy[pid]; EAR.load=null; renderRail();
+}
+/* After a new take, cut the scene again by itself unless someone has arranged it by hand. */
+function autoCutAfterTake(pid){ if((S.cuts&&S.cuts[pid]) && !(S.cutAuto||{})[pid]) { CUT.msg[pid]="Your new take is at the end. Tap Cut this scene together to place its lines for you."; renderRail(); return; } autoCut(pid); }
 /* Loudness of a clip in 20 ms steps. */
 const LOUD=new Map();
 function loudOf(url){ if(!LOUD.has(url)) LOUD.set(url,(async()=>{ const buf=await (await fetch(url)).arrayBuffer(); const ab=await audioCtx().decodeAudioData(buf); const x=ab.getChannelData(0), w=Math.round(ab.sampleRate*0.02), db=[]; for(let i=0;i+w<=x.length;i+=w){ let e=0; for(let k=i;k<i+w;k++) e+=x[k]*x[k]; db.push(10*Math.log10(e/w+1e-10)); } const so=[...db].sort((p,q)=>p-q), at=f=>so[Math.min(so.length-1,Math.floor(so.length*f))]; const top=at(0.95), thr=Math.max(top-26, Math.min(at(0.1)+10, top-12)); const sp=db.filter(v=>v>thr); const rms=sp.length?10*Math.log10(sp.reduce((q,v)=>q+Math.pow(10,v/10),0)/sp.length):-20; return {db,thr,rms,dur:ab.duration}; })().catch(e=>{ LOUD.delete(url); throw e; })); return LOUD.get(url); }
@@ -702,6 +806,8 @@ $("#rail").addEventListener("click", async e=>{
   const b=e.target.closest("[data-cut]"); if(!b) return; e.preventDefault();
   const pid=b.dataset.id, n=+b.dataset.n, rows=cutRows(pid), srcs=srcList(pid), x=rows[n], s=x&&srcs.find(q=>q.k===x.k); CUT.msg[pid]="";
   const act=b.dataset.cut;
+  if(act==="auto"){ audioCtx(); autoCut(pid); return; }
+  if(act==="undo"){ const u=CUT.undo[pid]; CUT.undo[pid]=null; if(u){ S.cuts[pid]=u.rows; S.cutSeen[pid]=u.seen; if(u.auto) S.cutAuto[pid]=u.auto; else delete S.cutAuto[pid]; saveCuts(); renderRail(); } else { setCut(pid,null); delete S.cutReset[pid]; saveCuts(); } return; }
   if(act==="toggle"){ CUT.open[pid]=!CUT.open[pid]; renderRail(); }
   if(act==="up"||act==="down"){ const m=act==="up"?n-1:n+1; [rows[n],rows[m]]=[rows[m],rows[n]]; setCut(pid,rows); }
   if(act==="drop"){ rows.splice(n,1); setCut(pid,rows); }
